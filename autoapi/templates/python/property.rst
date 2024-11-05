@@ -1,7 +1,7 @@
 {% if obj.display %}
    {% if is_own_page %}
-:py:property:`{{ obj.id }}`
-==============={{ "=" * obj.id | length }}
+{{ obj.id }}
+{{ "=" * obj.id | length }}
 
    {% endif %}
 .. py:property:: {% if is_own_page %}{{ obj.id}}{% else %}{{ obj.short_name }}{% endif %}
@@ -15,6 +15,7 @@
    {% endfor %}
 
    {% if obj.docstring %}
+
    {{ obj.docstring|indent(3) }}
    {% endif %}
 {% endif %}

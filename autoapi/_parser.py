@@ -1,5 +1,4 @@
 import collections
-import itertools
 import os
 
 import astroid
@@ -108,54 +107,110 @@ class Parser:
 
         return [data]
 
-    def parse_classdef(self, node, data=None):
+    def _parse_classdef(self, node, use_name_stacks):
+        if use_name_stacks:
+            qual_name = self._get_qual_name(node.name)
+            full_name = self._get_full_name(node.name)
+
+            self._qual_name_stack.append(node.name)
+            self._full_name_stack.append(node.name)
+        else:
+            qual_name = node.qname()[len(node.root().qname()) + 1 :]
+            full_name = node.qname()
+
         type_ = "class"
         if _astroid_utils.is_exception(node):
             type_ = "exception"
 
-        basenames = list(_astroid_utils.get_full_basenames(node))
-
         data = {
             "type": type_,
             "name": node.name,
-            "qual_name": self._get_qual_name(node.name),
-            "full_name": self._get_full_name(node.name),
-            "bases": basenames,
+            "qual_name": qual_name,
+            "full_name": full_name,
+            "bases": list(_astroid_utils.get_full_basenames(node)),
             "doc": _prepare_docstring(_astroid_utils.get_class_docstring(node)),
             "from_line_no": node.fromlineno,
             "to_line_no": node.tolineno,
             "children": [],
+            "is_abstract": _astroid_utils.is_abstract_class(node),
         }
 
-        self._qual_name_stack.append(node.name)
-        self._full_name_stack.append(node.name)
-        overridden = set()
         overloads = {}
-        for base in itertools.chain(iter((node,)), node.ancestors()):
+        for child in node.get_children():
+            children_data = self.parse(child)
+            for child_data in children_data:
+                if _parse_child(child_data, overloads):
+                    data["children"].append(child_data)
+
+        data["children"] = list(self._resolve_inheritance(data))
+
+        return data
+
+    def _resolve_inheritance(self, *mro_data):
+        overridden = set()
+        children = {}
+        for i, cls_data in enumerate(mro_data):
             seen = set()
+            base_children = []
+            overloads = {}
+
+            for child_data in cls_data["children"]:
+                name = child_data["name"]
+
+                existing_child = children.get(name)
+                if existing_child and not existing_child["doc"]:
+                    existing_child["doc"] = child_data["doc"]
+
+                if name in overridden:
+                    continue
+
+                seen.add(name)
+                if _parse_child(child_data, overloads):
+                    base_children.append(child_data)
+                    child_data["inherited"] = i != 0
+                    if child_data["inherited"]:
+                        child_data["inherited_from"] = cls_data
+
+            overridden.update(seen)
+
+            for base_child in base_children:
+                existing_child = children.get(base_child["name"])
+                if (
+                    existing_child
+                    # If an attribute was assigned to but this class has a property
+                    # with the same name, then the property was assigned to,
+                    # and not an attribute.
+                    and not (
+                        base_child["type"] == "property"
+                        and existing_child["type"] == "attribute"
+                    )
+                ):
+                    continue
+
+                children[base_child["name"]] = base_child
+
+        return children.values()
+
+    def _relevant_ancestors(self, node):
+        for base in node.ancestors():
             if base.qname() in (
                 "__builtins__.object",
                 "builtins.object",
                 "builtins.type",
             ):
                 continue
-            for child in base.get_children():
-                name = getattr(child, "name", None)
-                if isinstance(child, (astroid.Assign, astroid.AnnAssign)):
-                    assign_value = _astroid_utils.get_assign_value(child)
-                    if not assign_value:
-                        continue
-                    name = assign_value[0]
 
-                if not name or name in overridden:
-                    continue
-                seen.add(name)
-                child_data = self.parse(child)
-                data["children"].extend(
-                    _parse_child(node, child_data, overloads, base, name)
-                )
+            yield base
 
-            overridden.update(seen)
+    def parse_classdef(self, node):
+        data = self._parse_classdef(node, use_name_stacks=True)
+
+        ancestors = self._relevant_ancestors(node)
+        ancestor_data = [
+            self._parse_classdef(base, use_name_stacks=False) for base in ancestors
+        ]
+        if ancestor_data:
+            data["children"] = list(self._resolve_inheritance(data, *ancestor_data))
 
         self._qual_name_stack.pop()
         self._full_name_stack.pop()
@@ -198,7 +253,7 @@ class Parser:
             "qual_name": self._get_qual_name(node.name),
             "full_name": self._get_full_name(node.name),
             "args": _astroid_utils.get_args_info(node.args),
-            "doc": _prepare_docstring(_astroid_utils.get_func_docstring(node)),
+            "doc": _prepare_docstring(node.doc_node.value if node.doc_node else ""),
             "from_line_no": node.fromlineno,
             "to_line_no": node.tolineno,
             "return_annotation": _astroid_utils.get_return_annotation(node),
@@ -212,8 +267,28 @@ class Parser:
         if node.name == "__init__":
             for child in node.get_children():
                 if isinstance(child, (astroid.nodes.Assign, astroid.nodes.AnnAssign)):
+                    # Verify we are assigning to self.
+                    if isinstance(child, astroid.nodes.Assign):
+                        targets = child.targets
+                    else:
+                        targets = [child.target]
+
+                    target_ok = True
+                    for target in targets:
+                        if not isinstance(target, astroid.nodes.AssignAttr):
+                            target_ok = False
+                            break
+                        _object = target.expr
+                        if (
+                            not isinstance(_object, astroid.nodes.Name)
+                            or _object.name != "self"
+                        ):
+                            target_ok = False
+                            break
+                    if not target_ok:
+                        continue
                     child_data = self._parse_assign(child)
-                    result.extend(data for data in child_data if data["doc"])
+                    result.extend(data for data in child_data)
 
         return result
 
@@ -268,11 +343,13 @@ class Parser:
         top_name = node.name.split(".", 1)[0]
         for child in node.get_children():
             if _astroid_utils.is_local_import_from(child, top_name):
-                child_data = self._parse_local_import_from(child)
+                children_data = self._parse_local_import_from(child)
             else:
-                child_data = self.parse(child)
+                children_data = self.parse(child)
 
-            data["children"].extend(_parse_child(node, child_data, overloads))
+            for child_data in children_data:
+                if _parse_child(child_data, overloads):
+                    data["children"].append(child_data)
 
         return data
 
@@ -306,7 +383,7 @@ class Parser:
         return [data]
 
     def parse(self, node):
-        data = {}
+        data = []
 
         node_type = node.__class__.__name__.lower()
         parse_func = getattr(self, "parse_" + node_type, None)
@@ -317,28 +394,25 @@ class Parser:
                 data = self.parse(child)
                 if data:
                     break
+
         return data
 
 
-def _parse_child(node, child_data, overloads, base=None, name=None):
-    result = []
-    for single_data in child_data:
-        if single_data["type"] in ("function", "method", "property"):
-            if name is None:
-                name = single_data["name"]
-            if name in overloads:
-                grouped = overloads[name]
-                grouped["doc"] = single_data["doc"]
-                if single_data["is_overload"]:
-                    grouped["overloads"].append(
-                        (single_data["args"], single_data["return_annotation"])
-                    )
-                continue
-            if single_data["is_overload"] and name not in overloads:
-                overloads[name] = single_data
+def _parse_child(child_data, overloads) -> bool:
+    if child_data["type"] in ("function", "method", "property"):
+        name = child_data["name"]
+        if name in overloads:
+            grouped = overloads[name]
+            grouped["doc"] = child_data["doc"]
 
-        if base:
-            single_data["inherited"] = base is not node
-        result.append(single_data)
+            if child_data["is_overload"]:
+                grouped["overloads"].append(
+                    (child_data["args"], child_data["return_annotation"])
+                )
 
-    return result
+            return False
+
+        if child_data["is_overload"] and name not in overloads:
+            overloads[name] = child_data
+
+    return True

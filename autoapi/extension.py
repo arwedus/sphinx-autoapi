@@ -3,11 +3,10 @@
 This extension allows you to automagically generate API documentation from your project.
 """
 
-import io
+from __future__ import annotations
+
 import os
 import shutil
-from typing import Dict, Tuple
-import warnings
 
 import sphinx
 from sphinx.util.console import colorize
@@ -42,16 +41,8 @@ _VALID_PAGE_LEVELS = [
     "method",
     "attribute",
 ]
-_VIEWCODE_CACHE: Dict[str, Tuple[str, Dict]] = {}
+_VIEWCODE_CACHE: dict[str, tuple[str, dict[str, tuple[str, int, int]]]] = {}
 """Caches a module's parse results for use in viewcode."""
-
-
-class RemovedInAutoAPI3Warning(DeprecationWarning):
-    """Indicates something that will be removed in sphinx-autoapi v3."""
-
-
-if "PYTHONWARNINGS" not in os.environ:
-    warnings.filterwarnings("default", category=RemovedInAutoAPI3Warning)
 
 
 def _normalise_autoapi_dirs(autoapi_dirs, srcdir):
@@ -73,15 +64,6 @@ def run_autoapi(app):
     if not app.config.autoapi_dirs:
         raise ExtensionError("You must configure an autoapi_dirs setting")
 
-    if app.config.autoapi_include_summaries is not None:
-        warnings.warn(
-            "autoapi_include_summaries has been replaced by "
-            "the show-module-summary AutoAPI option\n",
-            RemovedInAutoAPI3Warning,
-        )
-        if app.config.autoapi_include_summaries:
-            app.config.autoapi_options.append("show-module-summary")
-
     own_page_level = app.config.autoapi_own_page_level
     if own_page_level not in _VALID_PAGE_LEVELS:
         raise ValueError(f"Invalid autoapi_own_page_level '{own_page_level}")
@@ -95,22 +77,14 @@ def run_autoapi(app):
                 "Please check your `autoapi_dirs` setting."
             )
 
+    template_dir = app.config.autoapi_template_dir
+    if template_dir and not os.path.isabs(template_dir):
+        template_dir = os.path.join(app.srcdir, app.config.autoapi_template_dir)
+
     normalized_root = os.path.normpath(
         os.path.join(app.srcdir, app.config.autoapi_root)
     )
     url_root = os.path.join("/", app.config.autoapi_root)
-
-    template_dir = app.config.autoapi_template_dir
-    if template_dir and not os.path.isabs(template_dir):
-        if not os.path.isdir(template_dir):
-            template_dir = os.path.join(app.srcdir, app.config.autoapi_template_dir)
-        elif app.srcdir != os.getcwd():
-            warnings.warn(
-                "autoapi_template_dir will be expected to be "
-                "relative to the Sphinx source directory instead of "
-                "relative to where sphinx-build is run\n",
-                RemovedInAutoAPI3Warning,
-            )
     sphinx_mapper_obj = Mapper(
         app, template_dir=template_dir, dir_root=normalized_root, url_root=url_root
     )
@@ -141,12 +115,19 @@ def run_autoapi(app):
         if app.config.autoapi_generate_api_docs:
             sphinx_mapper_obj.output_rst(source_suffix=out_suffix)
 
+    # This function cannot be pickled into the Sphinx cache, so clear it.
+    # We won't need access to it again until a full rebuild is done anyway.
+    app.config.autoapi_prepare_jinja_env = None
+
 
 def build_finished(app, exception):
     if not app.config.autoapi_keep_files and app.config.autoapi_generate_api_docs:
         normalized_root = os.path.normpath(
             os.path.join(app.srcdir, app.config.autoapi_root)
         )
+        if not os.path.exists(normalized_root):
+            return
+
         if app.verbosity > 1:
             LOGGER.info(
                 colorize("bold", "[AutoAPI] ")
@@ -224,10 +205,7 @@ def viewcode_find(app, modname):
             children = getattr(obj, "children", ())
             stack.extend((full_name + ".", gchild) for gchild in children)
 
-    if module.obj["encoding"]:
-        stream = io.open(module.obj["file_path"], encoding=module.obj["encoding"])
-    else:
-        stream = open(module.obj["file_path"], encoding="utf-8")
+    stream = open(module.obj["file_path"], encoding=module.obj.get("encoding", "utf-8"))
 
     with stream as in_f:
         source = in_f.read()

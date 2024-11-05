@@ -1,9 +1,11 @@
 import collections
 import copy
 import fnmatch
+import itertools
 import operator
 import os
 import re
+import sys
 
 from jinja2 import Environment, FileSystemLoader
 import sphinx
@@ -27,9 +29,16 @@ from ._objects import (
     PythonAttribute,
     PythonData,
     PythonException,
-    TopLevelPythonPythonMapper,
 )
 from .settings import OWN_PAGE_LEVELS, TEMPLATE_DIR
+
+if sys.version_info < (3, 10):  # PY310
+    from stdlib_list import in_stdlib
+else:
+
+    def in_stdlib(module_name: str) -> bool:
+        return module_name in sys.stdlib_module_names
+
 
 LOGGER = sphinx.util.logging.getLogger(__name__)
 
@@ -333,25 +342,6 @@ class Mapper:
                         yield filename
                         seen.add(norm_name)
 
-    def add_object(self, obj):
-        """Add object to local and app environment storage
-
-        Args:
-            obj: Instance of a AutoAPI object
-        """
-        display = obj.display
-        if display and obj.type in self.own_page_types:
-            self.objects_to_render[obj.id] = obj
-
-        self.all_objects[obj.id] = obj
-        child_stack = list(obj.children)
-        while child_stack:
-            child = child_stack.pop()
-            self.all_objects[child.id] = child
-            if display and child.type in self.own_page_types:
-                self.objects_to_render[child.id] = child
-            child_stack.extend(getattr(child, "children", ()))
-
     def output_rst(self, source_suffix):
         for _, obj in status_iterator(
             self.objects_to_render.items(),
@@ -378,6 +368,14 @@ class Mapper:
         # Render Top Index
         top_level_index = os.path.join(self.dir_root, "index.rst")
         pages = [obj for obj in self.objects_to_render.values() if obj.display]
+        if not pages:
+            msg = (
+                "No modules were rendered. "
+                "Do you need to set autoapi_options to render additional objects?"
+            )
+            LOGGER.warning(msg, type="autoapi", subtype="nothing_rendered")
+            return
+
         with open(top_level_index, "wb") as top_level_file:
             content = self.jinja_env.get_template("index.rst")
             top_level_file.write(content.render(pages=pages).encode("utf-8"))
@@ -453,7 +451,7 @@ class Mapper:
             else:
                 parsed_data = Parser().parse_file(path)
             return parsed_data
-        except (IOError, TypeError, ImportError):
+        except (OSError, TypeError, ImportError):
             LOGGER.debug("Reason:", exc_info=True)
             LOGGER.warning(
                 f"Unable to read file: {path}",
@@ -461,6 +459,24 @@ class Mapper:
                 subtype="not_readable",
             )
         return None
+
+    def _skip_if_stdlib(self):
+        documented_modules = {obj["full_name"] for obj in self.paths.values()}
+
+        q = collections.deque(self.paths.values())
+        while q:
+            obj = q.popleft()
+            if "children" in obj:
+                q.extend(obj["children"])
+
+            if obj.get("inherited", False):
+                module = obj["inherited_from"]["full_name"].split(".", 1)[0]
+                if (
+                    in_stdlib(module)
+                    and not obj["inherited_from"]["is_abstract"]
+                    and module not in documented_modules
+                ):
+                    obj["hide"] = True
 
     def _resolve_placeholders(self):
         """Resolve objects that have been imported from elsewhere."""
@@ -484,10 +500,11 @@ class Mapper:
                         child["hide"] = True
             elif module["type"] == "module":
                 for child in module["children"]:
-                    if child.get("imported"):
+                    if "original_path" in child:
                         child["hide"] = True
 
     def map(self, options=None):
+        self._skip_if_stdlib()
         self._resolve_placeholders()
         self._hide_yo_kids()
         self.app.env.autoapi_annotations = {}
@@ -499,27 +516,50 @@ class Mapper:
             stringify_func=(lambda x: x[0]),
         ):
             for obj in self.create_class(data, options=options):
-                self.add_object(obj)
+                self.all_objects[obj.id] = obj
 
-        top_level_objects = {
-            obj.id: obj
-            for obj in self.all_objects.values()
-            if isinstance(obj, TopLevelPythonPythonMapper)
-        }
-        parents = {obj.name: obj for obj in top_level_objects.values()}
-        for obj in top_level_objects.values():
-            parent_name = obj.name.rsplit(".", 1)[0]
-            if parent_name in parents and parent_name != obj.name:
-                parent = parents[parent_name]
-                attr = f"sub{obj.type}s"
-                getattr(parent, attr).append(obj)
-
-        for obj in top_level_objects.values():
-            obj.submodules.sort()
-            obj.subpackages.sort()
+        self._create_module_hierarchy()
+        self._render_selection()
 
         self.app.env.autoapi_objects = self.objects_to_render
         self.app.env.autoapi_all_objects = self.all_objects
+
+    def _create_module_hierarchy(self) -> None:
+        """Populate the sub{module,package}s attributes of all top level objects."""
+        for obj in self.all_objects.values():
+            parent_name = obj.name.rsplit(".", 1)[0]
+            if parent_name in self.all_objects and parent_name != obj.name:
+                parent = self.all_objects[parent_name]
+                attr = f"sub{obj.type}s"
+                getattr(parent, attr).append(obj)
+
+        for obj in self.all_objects.values():
+            obj.submodules.sort()
+            obj.subpackages.sort()
+
+    def _render_selection(self):
+        """Propagate display values to children."""
+        for obj in sorted(self.all_objects.values(), key=lambda obj: len(obj.id)):
+            if obj.display:
+                assert obj.type in self.own_page_types
+                self.objects_to_render[obj.id] = obj
+            else:
+                for module in itertools.chain(obj.subpackages, obj.submodules):
+                    module.obj["hide"] = True
+
+        def _inner(parent):
+            for child in parent.children:
+                self.all_objects[child.id] = child
+                if not parent.display:
+                    child.obj["hide"] = True
+
+                if child.display and child.type in self.own_page_types:
+                    self.objects_to_render[child.id] = child
+
+                _inner(child)
+
+        for obj in list(self.all_objects.values()):
+            _inner(obj)
 
     def create_class(self, data, options=None):
         """Create a class from the passed in data

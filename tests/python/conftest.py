@@ -1,8 +1,6 @@
-import io
 import os
 import pathlib
 import shutil
-from unittest.mock import call
 
 from bs4 import BeautifulSoup
 import pytest
@@ -11,7 +9,7 @@ from sphinx.application import Sphinx
 
 @pytest.fixture(scope="session")
 def rebuild():
-    def _rebuild(confdir=".", **kwargs):
+    def _rebuild(confdir=".", **kwargs) -> int:
         app = Sphinx(
             srcdir=".",
             confdir=confdir,
@@ -22,6 +20,7 @@ def rebuild():
             **kwargs,
         )
         app.build()
+        return app.statuscode
 
     return _rebuild
 
@@ -30,7 +29,7 @@ def rebuild():
 def builder(rebuild):
     cwd = os.getcwd()
 
-    def build(test_dir, **kwargs):
+    def build(test_dir, **kwargs) -> int:
         if kwargs.get("warningiserror"):
             # Add any warnings raised when using `Sphinx` more than once
             # in a Python session.
@@ -41,8 +40,8 @@ def builder(rebuild):
             suppress.append("app.add_directive")
             suppress.append("app.add_role")
 
-        os.chdir("tests/python/{0}".format(test_dir))
-        rebuild(**kwargs)
+        os.chdir(f"tests/python/{test_dir}")
+        return rebuild(**kwargs)
 
     yield build
 
@@ -60,7 +59,7 @@ def parse():
 
     def parser(path):
         if path not in cache:
-            with io.open(path, encoding="utf8") as file_handle:
+            with open(path, encoding="utf8") as file_handle:
                 cache[path] = BeautifulSoup(file_handle, features="html.parser")
 
         return cache[path]

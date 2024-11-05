@@ -1,8 +1,10 @@
-# -*- coding: utf-8 -*-
 """Example module
 
 This is a description
 """
+
+from dataclasses import dataclass
+from functools import cached_property
 
 A_TUPLE = ("a", "b")
 """A tuple to be rendered as a tuple."""
@@ -10,7 +12,7 @@ A_LIST = ["c", "d"]
 """A list to be rendered as a list."""
 
 
-class Foo(object):
+class Foo:
     """Can we parse arguments from the class docstring?
 
     :param attr: Set an attribute.
@@ -22,7 +24,7 @@ class Foo(object):
     another_class_var = 42
     """Another class var docstring"""
 
-    class Meta(object):
+    class Meta:
         """A nested class just to test things out"""
 
         @classmethod
@@ -40,8 +42,21 @@ class Foo(object):
         """
 
     @property
+    def attr(self):
+        return 5
+
+    @attr.setter
+    def attr(self, value):
+        pass
+
+    @property
     def property_simple(self) -> int:
         """This property should parse okay."""
+        return 42
+
+    @cached_property
+    def my_cached_property(self) -> int:
+        """This cached property should be a property."""
         return 42
 
     def method_okay(self, foo=None, bar=None):
@@ -143,6 +158,10 @@ class Two(One):
     """Two."""
 
 
+class Three:
+    __init__ = Two.__init__
+
+
 def fn_with_long_sig(
     this,
     *,
@@ -154,6 +173,29 @@ def fn_with_long_sig(
     signature,
     many,
     keyword,
-    arguments
+    arguments,
 ):
     """A function with a long signature."""
+
+
+TYPED_DATA: int = 1
+"""This is TYPED_DATA."""
+
+
+@dataclass
+class TypedAttrs:
+    one: str
+    """This is TypedAttrs.one."""
+    two: int = 1
+    """This is TypedAttrs.two."""
+
+
+class TypedClassInit:
+    """This is TypedClassInit."""
+
+    def __init__(self, one: int = 1) -> None:
+        self._one = one
+
+    def typed_method(self, two: int) -> int:
+        """This is TypedClassInit.typed_method."""
+        return self._one + two

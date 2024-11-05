@@ -1,4 +1,4 @@
-import io
+import logging
 import os
 import pathlib
 import sys
@@ -51,6 +51,10 @@ class TestSimpleModule:
         assert foo.find(id="example.Foo.Meta")
 
         # Check that class attributes are documented
+        attr = foo.find(id="example.Foo.attr")
+        assert attr
+        assert attr.find(class_="pre").text.strip() == "property"
+
         attr2 = foo.find(id="example.Foo.attr2")
         assert "attr2" in attr2.text
         # Check that attribute docstrings are used
@@ -93,6 +97,10 @@ class TestSimpleModule:
             property_simple.parent.find("dd").text.strip()
             == "This property should parse okay."
         )
+
+        my_cached_property = foo.find(id="example.Foo.my_cached_property")
+        assert my_cached_property
+        assert my_cached_property.find(class_="pre").text.strip() == "property"
 
         # Overridden methods without their own docstring
         # should inherit the parent's docstring
@@ -137,9 +145,9 @@ class TestSimpleModule:
     def test_show_inheritance(self, parse):
         example_file = parse("_build/html/autoapi/example/index.html")
 
-        foo = example_file.find(id="example.Foo")
-        foo_docstring = foo.parent.find("dd").contents[0]
-        assert foo_docstring.text.startswith("Bases:")
+        bar = example_file.find(id="example.Bar")
+        bar_docstring = bar.parent.find("dd").contents[0]
+        assert bar_docstring.text.startswith("Bases:")
 
     def test_long_signature(self, parse):
         example_file = parse("_build/html/autoapi/example/index.html")
@@ -169,6 +177,74 @@ class TestSimpleModuleManual:
     def test_manual_directives(self, parse):
         example_file = parse("_build/html/manualapi.html")
         assert example_file.find(id="example.decorator_okay")
+
+    def test_dataclass(self, parse):
+        example_file = parse("_build/html/manualapi.html")
+
+        typedattrs_sig = example_file.find(id="example.TypedAttrs")
+        assert typedattrs_sig
+
+        typedattrs = typedattrs_sig.parent
+
+        one = typedattrs.find(id="example.TypedAttrs.one")
+        assert one
+        one_value = one.find_all(class_="property")
+        assert one_value[0].text == ": str"
+        one_docstring = one.parent.find("dd").contents[0].text
+        assert one_docstring.strip() == "This is TypedAttrs.one."
+
+        two = typedattrs.find(id="example.TypedAttrs.two")
+        assert two
+        two_value = two.find_all(class_="property")
+        assert two_value[0].text == ": int"
+        assert two_value[1].text == " = 1"
+        two_docstring = two.parent.find("dd").contents[0].text
+        assert two_docstring.strip() == "This is TypedAttrs.two."
+
+    def test_data(self, parse):
+        example_file = parse("_build/html/manualapi.html")
+
+        typed_data = example_file.find(id="example.TYPED_DATA")
+        assert typed_data
+        typed_data_value = typed_data.find_all(class_="property")
+        assert typed_data_value[0].text == ": int"
+        assert typed_data_value[1].text == " = 1"
+
+        typed_data_docstring = typed_data.parent.find("dd").contents[0].text
+        assert typed_data_docstring.strip() == "This is TYPED_DATA."
+
+    def test_class(self, parse):
+        example_file = parse("_build/html/manualapi.html")
+
+        typed_cls = example_file.find(id="example.TypedClassInit")
+        assert typed_cls
+        arg = typed_cls.find(class_="sig-param")
+        assert arg.text == "one: int = 1"
+        typed_cls_docstring = typed_cls.parent.find("dd").contents[0].text
+        assert typed_cls_docstring.strip() == "This is TypedClassInit."
+
+        typed_method = example_file.find(id="example.TypedClassInit.typed_method")
+        assert typed_method
+        arg = typed_method.find(class_="sig-param")
+        assert arg.text == "two: int"
+        return_type = typed_method.find(class_="sig-return-typehint")
+        assert return_type.text == "int"
+        typed_method_docstring = typed_method.parent.find("dd").contents[0].text
+        assert typed_method_docstring.strip() == "This is TypedClassInit.typed_method."
+
+    def test_property(self, parse):
+        example_file = parse("_build/html/manualapi.html")
+
+        foo_sig = example_file.find(id="example.Foo")
+        assert foo_sig
+        foo = foo_sig.parent
+
+        property_simple = foo.find(id="example.Foo.property_simple")
+        assert property_simple
+        property_simple_value = property_simple.find_all(class_="property")
+        assert property_simple_value[-1].text == ": int"
+        property_simple_docstring = property_simple.parent.find("dd").text.strip()
+        assert property_simple_docstring == "This property should parse okay."
 
 
 class TestMovedConfPy(TestSimpleModule):
@@ -269,6 +345,44 @@ class TestPy3Module:
         assert "Initialize self" not in example_file
         assert "a new type" not in example_file
 
+    def test_inheritance(self, parse):
+        example_file = parse("_build/html/autoapi/example/index.html")
+
+        # Test that members are not inherited from standard library classes.
+        assert example_file.find(id="example.MyException")
+        assert not example_file.find(id="example.MyException.args")
+        # With the exception of abstract base classes.
+        assert example_file.find(id="example.My123")
+        assert example_file.find(id="example.My123.__contains__")
+        assert example_file.find(id="example.My123.index")
+
+        # Test that classes inherit instance attributes
+        exc = example_file.find(id="example.InheritError")
+        assert exc
+        message = example_file.find(id="example.InheritError.my_message")
+        assert message
+        message_docstring = message.parent.find("dd").text.strip()
+        assert message_docstring == "My message."
+
+        # Test that classes inherit from the whole mro
+        exc = example_file.find(id="example.SubInheritError")
+        assert exc
+        message = example_file.find(id="example.SubInheritError.my_message")
+        message_docstring = message.parent.find("dd").text.strip()
+        assert message_docstring == "My message."
+        message = example_file.find(id="example.SubInheritError.my_other_message")
+        assert message
+        message_docstring = message.parent.find("dd").text.strip()
+        assert message_docstring == "My other message."
+
+        # Test that inherited instance attributes include the docstring
+        exc = example_file.find(id="example.DuplicateInheritError")
+        assert exc
+        message = example_file.find(id="example.DuplicateInheritError.my_message")
+        assert message
+        message_docstring = message.parent.find("dd").text.strip()
+        assert message_docstring == "My message."
+
     def test_annotations(self, parse):
         example_file = parse("_build/html/autoapi/example/index.html")
 
@@ -344,6 +458,13 @@ class TestPy3Module:
         assert "ClassVar" in is_an_a_value[0].text
 
         assert example_file.find(id="example.A.instance_var")
+
+        # Locals are excluded
+        assert not example_file.find(id="example.A.local_variable_typed")
+        assert not example_file.find(id="example.A.local_variable_untyped")
+
+        # Assignments to subobjects are excluded
+        assert not example_file.find(id="example.A.subobject_variable")
 
         global_a = example_file.find(id="example.global_a")
         assert global_a
@@ -544,6 +665,7 @@ class TestPositionalOnlyArgumentsModule:
         assert "f_no_cd(a: int, b: int, /, *, e: float, f: float)" in f_no_cd.text
 
 
+@pytest.mark.network
 @pytest.mark.skipif(
     sys.version_info < (3, 10), reason="Union pipe syntax requires Python >=3.10"
 )
@@ -587,6 +709,7 @@ class TestPipeUnionModule:
         assert links[1].text == "None"
 
 
+@pytest.mark.network
 @pytest.mark.skipif(
     sys.version_info < (3, 12), reason="PEP-695 support requires Python >=3.12"
 )
@@ -746,6 +869,16 @@ def test_hiding_imported_members(builder, parse):
     assert not submodule_file.find(id="complex.subpackage.now_public_function")
 
 
+def test_imports_into_modules_always_hidden(builder, parse):
+    confoverrides = {
+        "autoapi_options": ["members", "undoc-members", "imported-members"]
+    }
+    builder("pypackagecomplex", confoverrides=confoverrides)
+
+    submodule_file = parse("_build/html/autoapi/complex/submodule/index.html")
+    assert not submodule_file.find(id="complex.submodule.imported_function")
+
+
 def test_inherited_members(builder, parse):
     confoverrides = {
         "autoapi_options": ["members", "inherited-members", "undoc-members"],
@@ -803,7 +936,7 @@ class _CompareInstanceType:
         return self.type is type(other)
 
     def __repr__(self):
-        return "<expect type {}>".format(self.type.__name__)
+        return f"<expect type {self.type.__name__}>"
 
 
 def test_skip_members_hook(builder):
@@ -1090,7 +1223,7 @@ def test_string_module_attributes(builder):
     builder("py3example", confoverrides=keep_rst)
 
     example_path = os.path.join("autoapi", "example", "index.rst")
-    with io.open(example_path, encoding="utf8") as example_handle:
+    with open(example_path, encoding="utf8") as example_handle:
         example_file = example_handle.read()
 
     code_snippet_contents = [
@@ -1180,3 +1313,65 @@ class TestMemberOrder:
         method_sphinx_docs = example_file.find(id="example.Foo.method_sphinx_docs")
 
         assert method_tricky.sourceline < method_sphinx_docs.sourceline
+
+
+def test_nothing_to_render_raises_warning(builder, caplog):
+    caplog.set_level(logging.WARNING, logger="autoapi._mapper")
+    if sphinx_version >= (8, 1):
+        status = builder("pynorender", warningiserror=True)
+        assert status
+    else:
+        with pytest.raises(sphinx.errors.SphinxWarning):
+            builder("pynorender", warningiserror=True)
+
+    assert any(
+        "No modules were rendered" in record.message for record in caplog.records
+    )
+
+
+class TestStdLib:
+    """Check that modules with standard library names are still documented."""
+
+    @pytest.fixture(autouse=True)
+    def built(self, builder):
+        builder("pystdlib")
+
+    def test_integration(self, parse):
+        json_file = parse("_build/html/autoapi/json/index.html")
+
+        json_mod = json_file.find(id="json")
+        assert "json is the same name" in json_mod.parent.text
+
+        assert json_file.find(id="json.JSONDecoder")
+        decode = json_file.find(id="json.JSONDecoder.decode")
+        assert decode
+        wrap_docstring = decode.parent.find("dd").text.strip()
+        assert wrap_docstring == "Decode a string."
+
+        myjson_file = parse("_build/html/autoapi/myjson/index.html")
+
+        # Find members that are not inherited from local standard library classes.
+        ctx = myjson_file.find(id="myjson.MyJSONDecoder")
+        assert ctx
+        meth = myjson_file.find(id="myjson.MyJSONDecoder.my_method")
+        assert meth
+        meth_docstring = meth.parent.find("dd").text.strip()
+        assert meth_docstring == "This is a method."
+
+        # Find members that are inherited from local standard library classes.
+        decode = myjson_file.find(id="myjson.MyJSONDecoder.decode")
+        assert decode
+
+        myast_file = parse("_build/html/autoapi/myast/index.html")
+
+        # Find members that are not inherited from standard library classes.
+        visitor = myast_file.find(id="myast.MyVisitor")
+        assert visitor
+        meth = myast_file.find(id="myast.MyVisitor.my_visit")
+        assert meth
+        meth_docstring = meth.parent.find("dd").text.strip()
+        assert meth_docstring == "My visit method."
+
+        # Find members that are inherited from standard library classes.
+        meth = myast_file.find(id="myast.MyVisitor.visit")
+        assert not meth

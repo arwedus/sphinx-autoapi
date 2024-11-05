@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 """Example module
 
 This is a description
 """
+
 import asyncio
+import collections.abc
 import typing
 from typing import ClassVar, Dict, Iterable, Generic, List, TypeVar, Union, overload
 
@@ -91,6 +92,12 @@ class A:
         self.instance_var: bool = True
         """This is an instance_var."""
 
+        self.subobject: object = object()
+        self.subobject.subobject_variable = 1
+
+        local_variable_typed: int = 0
+        local_variable_untyped = 2
+
     async def async_method(self, wait: bool) -> int:
         if wait:
             await asyncio.sleep(1)
@@ -169,3 +176,48 @@ global_a: A = A()
 
 
 class SomeMetaclass(type): ...
+
+
+class MyException(Exception):
+    pass
+
+
+class My123(collections.abc.Sequence):
+    def __getitem__(self, i):
+        if i < len(self):
+            return i
+
+        raise IndexError(i)
+
+    def __len__(self):
+        return 3
+
+
+class InheritBaseError(Exception):
+    """The base exception."""
+
+    def __init__(self):
+        self.my_message = "one"
+        """My message."""
+        super().__init__(self.my_message)
+
+
+class InheritError(InheritBaseError):
+    """The middle exception."""
+
+    def __init__(self):
+        self.my_other_message = "two"
+        """My other message."""
+        super().__init__()
+
+
+class SubInheritError(InheritError):
+    """The last exception."""
+
+
+class DuplicateInheritError(InheritBaseError):
+    """Not the base exception."""
+
+    def __init__(self):
+        self.my_message = "three"
+        super().__init__()

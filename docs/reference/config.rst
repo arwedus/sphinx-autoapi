@@ -69,6 +69,8 @@ Customisation Options
    * ``members``: Display children of an object
    * ``inherited-members``: Display children of an object
      that have been inherited from a base class.
+     Members from standard library base classes are not included,
+     unless the base class is abstract.
    * ``undoc-members``: Display objects that have no docstring
    * ``private-members``: Display private objects (eg. ``_foo`` in Python)
    * ``special-members``: Display special objects (eg. ``__foo__`` in Python)
@@ -171,7 +173,7 @@ Customisation Options
    Default: ``None``
 
    A callback that is called shortly after the Jinja environment is created.
-   It passed the Jinja environment for editing before template rendering begins.
+   The callback is passed the Jinja environment for editing before template rendering begins.
 
    The callback should have the following signature:
 
@@ -187,16 +189,16 @@ Customisation Options
    a single page. Valid levels, in descending order of hierarchy, are as
    follows:
 
-      * ``module``: Packages, modules, subpackages, and submodules.
+   * ``module``: Packages, modules, subpackages, and submodules.
 
-      * ``class``: Classes, exceptions, and all object types mentioned above.
+   * ``class``: Classes, exceptions, and all object types mentioned above.
 
-      * ``function``: Functions, and all object types mentioned above.
+   * ``function``: Functions, and all object types mentioned above.
 
-      * ``method``: Methods, and all object types mentioned above.
+   * ``method``: Methods, and all object types mentioned above.
 
-      * ``attribute``: Class and module level attributes, properties,
-        and all object types mentioned above.
+   * ``attribute``: Class and module level attributes, properties,
+     and all object types mentioned above.
 
 
 Events
@@ -273,13 +275,19 @@ Suppressing Warnings
 
    If narrower suppression is wanted, the available subtypes for AutoAPI are:
 
-     * python_import_resolution
-       Used if resolving references to objects in an imported module failed. Potential reasons
-       include cyclical imports and missing (parent) modules.
-     * not_readable
-       Emitted if processing (opening, parsing, ...) an input file failed.
-     * toc_reference
-       Used if a reference to an entry in a table of content cannot be resolved.
+   * ``python_import_resolution``:
+     Emitted if resolving references to objects in an imported module failed.
+     Potential reasons include cyclical imports and missing (parent) modules.
+   * ``not_readable``:
+     Emitted if processing (opening, parsing, ...) an input file failed.
+   * ``toc_reference``:
+     Emitted if a reference to an entry in a table of content cannot be resolved.
+   * ``nothing_rendered``:
+     Emitted if nothing was found to be documented.
+     Potential reasons include no files being found in :confval:`autoapi_dirs`
+     that match :confval:`autoapi_file_patterns`,
+     or all discovered modules and objects being excluded from rendering due to
+     :confval:`autoapi_options` or :ref:`other rendering exclusions <customise-documented-api>`.
 
    So if all AutoAPI warnings concerning unreadable sources and failing Python imports should be
    filtered, but all other warnings should not, the option would be
